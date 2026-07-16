@@ -1,0 +1,16 @@
+{
+  "name": "first-town-access-bot",
+  "version": "1.0.0",
+  "description": "Discord bot that logs website login attempts and lets admins Accept/Reject them with buttons.",
+  "main": "bot.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "discord.js": "^14.14.1",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
+  }
+}
