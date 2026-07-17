@@ -1,6 +1,7 @@
 require('dotenv').config();
 const crypto = require('crypto');
 const express = require('express');
+const cors = require('cors');
 const {
   Client,
   GatewayIntentBits,
@@ -85,6 +86,7 @@ client.login(process.env.DISCORD_TOKEN);
 
 // ===== HTTP API =====
 const app = express();
+app.use(cors()); // يسمح لأي موقع يتواصل مع هذا السيرفر (محمي أصلاً بمفتاح API)
 app.use(express.json());
 
 // Simple API key check for every request
