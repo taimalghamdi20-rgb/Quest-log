@@ -107,8 +107,6 @@ client.on('interactionCreate', async (interaction) => {
   await interaction.update({ embeds: [decidedEmbed], components: buildButtons(requestId, true) });
 });
 
-client.login('MTQ5ODA2MTUwMTk4NTA2MzAyMg.G8tchD.X809kei7fhnbyFSak1icFycVodwqlaA3lvDMiU');
-
 // ---------- HTTP API ----------
 
 const app = express();
