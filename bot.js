@@ -1,4 +1,5 @@
-require('dotenv').config();
+// تم إيقاف سطر dotenv لأنك تستخدم لوحة التحكم (Variables) بدلاً من ملف .env
+// require('dotenv').config();
 
 const express = require('express');
 const cors = require('cors');
@@ -11,19 +12,19 @@ const {
   EmbedBuilder
 } = require('discord.js');
 
+// قراءة الإعدادات من الخانات الموجودة في لوحة التحكم
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID;
 const APPROVER_ROLE_ID = process.env.APPROVER_ROLE_ID || null;
 const PORT = process.env.PORT || 3000;
 
+// التحقق من وجود الإعدادات الأساسية في لوحة التحكم
 if (!BOT_TOKEN || !LOG_CHANNEL_ID) {
-  console.error('Missing BOT_TOKEN or LOG_CHANNEL_ID in your .env file. Copy .env.example to .env and fill it in.');
+  console.error('⚠️ خطأ: لم يتم العثور على BOT_TOKEN أو LOG_CHANNEL_ID. الرجاء التأكد من إضافتها في خانات لوحة التحكم (Variables).');
   process.exit(1);
 }
 
 // In-memory store of pending/decided requests.
-// NOTE: this resets if the process restarts. For long-term history, replace
-// this with a real database (SQLite, Postgres, etc.) if you need it.
 const requests = new Map();
 
 function makeRequestId() {
@@ -76,7 +77,7 @@ function buildButtons(requestId, disabled) {
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
 client.once('ready', () => {
-  console.log(`Logged in as ${client.user.tag}`);
+  console.log(`✅ Logged in successfully as ${client.user.tag}`);
 });
 
 client.on('interactionCreate', async (interaction) => {
@@ -113,8 +114,6 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Called by the website right after a successful Discord OAuth login.
-// Posts a pending request to the log channel and returns a requestId to poll.
 app.post('/api/verify', async (req, res) => {
   const { discordId, tag, country, device } = req.body || {};
 
@@ -149,7 +148,6 @@ app.post('/api/verify', async (req, res) => {
   }
 });
 
-// Called by the website every few seconds while waiting for a decision.
 app.get('/api/status/:id', (req, res) => {
   const entry = requests.get(req.params.id);
   if (!entry) {
@@ -159,5 +157,11 @@ app.get('/api/status/:id', (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`API listening on port ${PORT}`);
+  console.log(`🌐 API is running and listening on port ${PORT}`);
+});
+
+// ---------- Login to Discord ----------
+// هذا هو السطر الذي كان ينقص الكود لتشغيل البوت فعلياً
+client.login(BOT_TOKEN).catch(err => {
+  console.error('❌ Failed to login to Discord. Please check your BOT_TOKEN:', err);
 });
