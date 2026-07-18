@@ -18,6 +18,7 @@ const API_KEY = process.env.API_KEY;
 const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID;
 const ADMIN_ROLE_ID = process.env.ADMIN_ROLE_ID || null;
 const PREFIX = process.env.PREFIX || '!';
+const REMINDER_AFTER_MS = 5 * 60 * 1000; // 5 minutes
 
 if (!process.env.DISCORD_TOKEN || !API_KEY || !LOG_CHANNEL_ID) {
   console.error('❌ Missing required environment variables. Check DISCORD_TOKEN, API_KEY, and LOG_CHANNEL_ID in your .env file.');
@@ -25,10 +26,6 @@ if (!process.env.DISCORD_TOKEN || !API_KEY || !LOG_CHANNEL_ID) {
 }
 
 // ===== Persistent whitelist (accounts that are already approved) =====
-// Stored as a JSON file so approved accounts don't need to ask again.
-// NOTE: On most free hosting plans the filesystem resets when the service is
-// redeployed (not on every restart, but on new deploys). For a fully durable
-// solution across redeploys, this could later be swapped for a small database.
 const WHITELIST_FILE = path.join(__dirname, 'whitelist.json');
 
 function loadWhitelist() {
@@ -36,7 +33,7 @@ function loadWhitelist() {
     const raw = fs.readFileSync(WHITELIST_FILE, 'utf8');
     return new Map(Object.entries(JSON.parse(raw)));
   } catch (err) {
-    return new Map(); // file doesn't exist yet or is empty/corrupted
+    return new Map();
   }
 }
 
@@ -48,10 +45,43 @@ function saveWhitelist() {
 const whitelist = loadWhitelist();
 // whitelist.set(discordId, { username, approvedAt, approvedBy })
 
-// ===== In-memory store of pending/decided login requests =====
-// This can safely stay in-memory since requests only need to live for a few minutes.
+// ===== Persistent history (every login attempt ever made, accepted or not) =====
+const HISTORY_FILE = path.join(__dirname, 'history.json');
+
+function loadHistory() {
+  try {
+    const raw = fs.readFileSync(HISTORY_FILE, 'utf8');
+    return JSON.parse(raw);
+  } catch (err) {
+    return [];
+  }
+}
+
+function saveHistory() {
+  fs.writeFileSync(HISTORY_FILE, JSON.stringify(history, null, 2), 'utf8');
+}
+
+let history = loadHistory();
+// history: [{ requestId, discordId, username, country, avatarUrl, createdAt, status, decidedBy, decidedAt, source }]
+
+function addHistoryEntry(entry) {
+  history.push(entry);
+  // Keep the file from growing forever — cap at last 2000 entries
+  if (history.length > 2000) history = history.slice(history.length - 2000);
+  saveHistory();
+}
+
+function updateHistoryEntry(requestId, updates) {
+  const entry = history.find((h) => h.requestId === requestId);
+  if (entry) {
+    Object.assign(entry, updates);
+    saveHistory();
+  }
+}
+
+// ===== In-memory store of pending/decided login requests (short-lived) =====
 const requests = new Map();
-// requests.set(requestId, { discordId, username, country, createdAt, status: 'pending' | 'accepted' | 'rejected' })
+// requests.set(requestId, { discordId, username, country, createdAt, status, messageId, reminded })
 
 setInterval(() => {
   const now = Date.now();
@@ -77,6 +107,24 @@ function hasPermission(member) {
   if (!ADMIN_ROLE_ID) return true;
   return member.roles.cache.has(ADMIN_ROLE_ID);
 }
+
+// ===== Reminder: ping if a request has been pending too long =====
+setInterval(async () => {
+  const now = Date.now();
+  for (const [requestId, req] of requests.entries()) {
+    if (req.status === 'pending' && !req.reminded && now - req.createdAt > REMINDER_AFTER_MS) {
+      req.reminded = true;
+      try {
+        const channel = await client.channels.fetch(LOG_CHANNEL_ID);
+        const mention = ADMIN_ROLE_ID ? `<@&${ADMIN_ROLE_ID}>` : '@here';
+        const link = req.messageId ? `https://discord.com/channels/${channel.guildId}/${LOG_CHANNEL_ID}/${req.messageId}` : '';
+        await channel.send(`⏰ ${mention} A login request from **${req.username}** has been waiting for ${Math.round((now - req.createdAt) / 60000)} minutes. ${link}`);
+      } catch (err) {
+        console.error('Failed to send reminder:', err);
+      }
+    }
+  }
+}, 60 * 1000);
 
 // ===== Button clicks (Accept / Reject) =====
 client.on('interactionCreate', async (interaction) => {
@@ -105,7 +153,12 @@ client.on('interactionCreate', async (interaction) => {
   req.decidedBy = interaction.user.tag;
   req.decidedAt = Date.now();
 
-  // If accepted, remember this account so they won't need to ask again next time
+  updateHistoryEntry(requestId, {
+    status: req.status,
+    decidedBy: req.decidedBy,
+    decidedAt: req.decidedAt,
+  });
+
   if (decision === 'accept') {
     whitelist.set(req.discordId, {
       username: req.username,
@@ -128,7 +181,7 @@ client.on('interactionCreate', async (interaction) => {
   });
 });
 
-// ===== Text commands: !list and !adduser =====
+// ===== Text commands =====
 client.on('messageCreate', async (message) => {
   if (message.author.bot || !message.guild) return;
   if (!message.content.startsWith(PREFIX)) return;
@@ -146,7 +199,6 @@ client.on('messageCreate', async (message) => {
     }
 
     const entries = [...whitelist.entries()];
-    // Discord embeds have a description length limit, so we chunk into pages of 20
     const chunkSize = 20;
     for (let i = 0; i < entries.length; i += chunkSize) {
       const chunk = entries.slice(i, i + chunkSize);
@@ -183,6 +235,19 @@ client.on('messageCreate', async (message) => {
     });
     saveWhitelist();
 
+    addHistoryEntry({
+      requestId: crypto.randomUUID(),
+      discordId,
+      username,
+      country: 'N/A',
+      avatarUrl: null,
+      createdAt: Date.now(),
+      status: 'accepted',
+      decidedBy: message.author.tag,
+      decidedAt: Date.now(),
+      source: 'manual',
+    });
+
     return message.reply(`✅ Added \`${discordId}\` (${username}) to the approved list.`);
   }
 
@@ -201,6 +266,29 @@ client.on('messageCreate', async (message) => {
     return message.reply(`✅ Removed \`${discordId}\` from the approved list.`);
   }
 
+  if (command === 'stats') {
+    if (!hasPermission(message.member)) {
+      return message.reply('❌ You do not have permission to use this command.');
+    }
+
+    const accepted = history.filter((h) => h.status === 'accepted').length;
+    const rejected = history.filter((h) => h.status === 'rejected').length;
+    const pending = [...requests.values()].filter((r) => r.status === 'pending').length;
+    const total = history.length;
+
+    const embed = new EmbedBuilder()
+      .setColor(0x5865f2)
+      .setTitle('📊 Login Approval Stats')
+      .addFields(
+        { name: '✅ Accepted', value: `${accepted}`, inline: true },
+        { name: '❌ Rejected', value: `${rejected}`, inline: true },
+        { name: '⏳ Pending now', value: `${pending}`, inline: true },
+        { name: '📁 Total attempts logged', value: `${total}`, inline: false },
+      );
+
+    return message.reply({ embeds: [embed] });
+  }
+
   if (command === 'help') {
     const embed = new EmbedBuilder()
       .setColor(0x5865f2)
@@ -208,7 +296,8 @@ client.on('messageCreate', async (message) => {
       .setDescription(
         `\`${PREFIX}list\` - Show all approved accounts\n` +
         `\`${PREFIX}adduser <discordId> [note]\` - Manually approve an account\n` +
-        `\`${PREFIX}removeuser <discordId>\` - Remove an account from the approved list`
+        `\`${PREFIX}removeuser <discordId>\` - Remove an account from the approved list\n` +
+        `\`${PREFIX}stats\` - Show accepted/rejected/pending counts`
       );
     return message.reply({ embeds: [embed] });
   }
@@ -233,9 +322,6 @@ app.get('/', (req, res) => {
   res.send('Login approval bot is running ✅');
 });
 
-// 1) Website calls this when someone tries to log in
-// POST /api/login-attempt
-// body: { discordId, username, country }
 app.post('/api/login-attempt', requireApiKey, async (req, res) => {
   const { discordId, username, country, avatarUrl } = req.body;
 
@@ -243,19 +329,35 @@ app.post('/api/login-attempt', requireApiKey, async (req, res) => {
     return res.status(400).json({ error: 'discordId and username are required' });
   }
 
-  // Already approved before? Let them straight in, no need to ask again.
   if (whitelist.has(discordId)) {
     return res.json({ requestId: null, status: 'accepted', alreadyApproved: true });
   }
 
   const requestId = crypto.randomUUID();
+  const createdAt = Date.now();
+
   requests.set(requestId, {
     discordId,
     username,
     country: country || 'Unknown',
     avatarUrl: avatarUrl || null,
-    createdAt: Date.now(),
+    createdAt,
     status: 'pending',
+    messageId: null,
+    reminded: false,
+  });
+
+  addHistoryEntry({
+    requestId,
+    discordId,
+    username,
+    country: country || 'Unknown',
+    avatarUrl: avatarUrl || null,
+    createdAt,
+    status: 'pending',
+    decidedBy: null,
+    decidedAt: null,
+    source: 'website',
   });
 
   try {
@@ -284,7 +386,9 @@ app.post('/api/login-attempt', requireApiKey, async (req, res) => {
         .setStyle(ButtonStyle.Danger),
     );
 
-    await channel.send({ embeds: [embed], components: [row] });
+    const sentMessage = await channel.send({ embeds: [embed], components: [row] });
+    const stored = requests.get(requestId);
+    if (stored) stored.messageId = sentMessage.id;
   } catch (err) {
     console.error('Failed to post log message:', err);
     return res.status(500).json({ error: 'Failed to send log message to Discord' });
@@ -293,8 +397,6 @@ app.post('/api/login-attempt', requireApiKey, async (req, res) => {
   res.json({ requestId, status: 'pending' });
 });
 
-// 2) Website polls this to check the decision
-// GET /api/login-attempt/:requestId
 app.get('/api/login-attempt/:requestId', requireApiKey, (req, res) => {
   const request = requests.get(req.params.requestId);
   if (!request) {
@@ -309,8 +411,6 @@ app.get('/api/login-attempt/:requestId', requireApiKey, (req, res) => {
   });
 });
 
-// 3) (Optional but handy) Website can directly check if a Discord ID is already approved
-// GET /api/check/:discordId
 app.get('/api/check/:discordId', requireApiKey, (req, res) => {
   const approved = whitelist.has(req.params.discordId);
   res.json({ approved });
