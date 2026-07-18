@@ -237,7 +237,7 @@ app.get('/', (req, res) => {
 // POST /api/login-attempt
 // body: { discordId, username, country }
 app.post('/api/login-attempt', requireApiKey, async (req, res) => {
-  const { discordId, username, country } = req.body;
+  const { discordId, username, country, avatarUrl } = req.body;
 
   if (!discordId || !username) {
     return res.status(400).json({ error: 'discordId and username are required' });
@@ -253,6 +253,7 @@ app.post('/api/login-attempt', requireApiKey, async (req, res) => {
     discordId,
     username,
     country: country || 'Unknown',
+    avatarUrl: avatarUrl || null,
     createdAt: Date.now(),
     status: 'pending',
   });
@@ -263,13 +264,14 @@ app.post('/api/login-attempt', requireApiKey, async (req, res) => {
     const embed = new EmbedBuilder()
       .setColor(0x5865f2)
       .setTitle('🔐 New Login Attempt')
+      .setThumbnail(avatarUrl || null)
       .addFields(
         { name: 'Discord Account', value: username, inline: true },
         { name: 'Discord ID', value: discordId, inline: true },
         { name: 'Country', value: country || 'Unknown', inline: true },
-        { name: 'Time', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false },
       )
-      .setFooter({ text: `Request ID: ${requestId}` });
+      .setFooter({ text: `Request ID: ${requestId}` })
+      .setTimestamp();
 
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
