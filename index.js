@@ -45,6 +45,26 @@ function saveWhitelist() {
 const whitelist = loadWhitelist();
 // whitelist.set(discordId, { username, approvedAt, approvedBy })
 
+// ===== Persistent banned list (accounts permanently blocked from applying) =====
+const BANNED_FILE = path.join(__dirname, 'banned.json');
+
+function loadBanned() {
+  try {
+    const raw = fs.readFileSync(BANNED_FILE, 'utf8');
+    return new Map(Object.entries(JSON.parse(raw)));
+  } catch (err) {
+    return new Map();
+  }
+}
+
+function saveBanned() {
+  const obj = Object.fromEntries(banned);
+  fs.writeFileSync(BANNED_FILE, JSON.stringify(obj, null, 2), 'utf8');
+}
+
+const banned = loadBanned();
+// banned.set(discordId, { username, bannedAt, bannedBy, reason })
+
 // ===== Persistent history (every login attempt ever made, accepted or not) =====
 const HISTORY_FILE = path.join(__dirname, 'history.json');
 
@@ -289,6 +309,110 @@ client.on('messageCreate', async (message) => {
     return message.reply({ embeds: [embed] });
   }
 
+  if (command === 'banuser') {
+    if (!hasPermission(message.member)) {
+      return message.reply('❌ You do not have permission to use this command.');
+    }
+
+    const discordId = args[0];
+    const reason = args.slice(1).join(' ') || 'No reason provided';
+
+    if (!discordId || !/^\d{15,25}$/.test(discordId)) {
+      return message.reply(`⚠️ Usage: \`${PREFIX}banuser <discordId> [reason]\`\nExample: \`${PREFIX}banuser 123456789012345678 Repeated spam attempts\``);
+    }
+
+    // Banning overrides any prior approval
+    whitelist.delete(discordId);
+    saveWhitelist();
+
+    const priorEntry = [...history].reverse().find((h) => h.discordId === discordId);
+    const username = priorEntry ? priorEntry.username : 'Unknown';
+
+    banned.set(discordId, {
+      username,
+      bannedAt: Date.now(),
+      bannedBy: message.author.tag,
+      reason,
+    });
+    saveBanned();
+
+    addHistoryEntry({
+      requestId: crypto.randomUUID(),
+      discordId,
+      username,
+      country: 'N/A',
+      avatarUrl: null,
+      createdAt: Date.now(),
+      status: 'banned',
+      decidedBy: message.author.tag,
+      decidedAt: Date.now(),
+      source: 'manual',
+    });
+
+    return message.reply(`🚫 Banned \`${discordId}\` (${username}).\nReason: ${reason}\nThey will be auto-rejected on any future login attempt.`);
+  }
+
+  if (command === 'unbanuser') {
+    if (!hasPermission(message.member)) {
+      return message.reply('❌ You do not have permission to use this command.');
+    }
+
+    const discordId = args[0];
+    if (!discordId || !banned.has(discordId)) {
+      return message.reply(`⚠️ That Discord ID isn't currently banned.`);
+    }
+
+    banned.delete(discordId);
+    saveBanned();
+    return message.reply(`✅ Unbanned \`${discordId}\`. They can apply again normally.`);
+  }
+
+  if (command === 'search') {
+    if (!hasPermission(message.member)) {
+      return message.reply('❌ You do not have permission to use this command.');
+    }
+
+    const discordId = args[0];
+    if (!discordId || !/^\d{15,25}$/.test(discordId)) {
+      return message.reply(`⚠️ Usage: \`${PREFIX}search <discordId>\`\nExample: \`${PREFIX}search 123456789012345678\``);
+    }
+
+    const entries = history.filter((h) => h.discordId === discordId).sort((a, b) => a.createdAt - b.createdAt);
+
+    if (entries.length === 0) {
+      return message.reply(`📭 No history found for \`${discordId}\`.`);
+    }
+
+    const username = entries[entries.length - 1].username;
+    const isWhitelisted = whitelist.has(discordId);
+    const isBanned = banned.has(discordId);
+
+    let currentStatus = '⏳ No active approval';
+    if (isBanned) currentStatus = `🚫 Banned (${banned.get(discordId).reason})`;
+    else if (isWhitelisted) currentStatus = '✅ Currently approved';
+
+    const timeline = entries
+      .slice(-10) // last 10 attempts
+      .map((h, i) => {
+        const statusEmoji = { accepted: '✅', rejected: '❌', pending: '⏳', banned: '🚫' }[h.status] || '❔';
+        const decided = h.decidedBy ? ` by ${h.decidedBy}` : '';
+        return `${statusEmoji} <t:${Math.floor(h.createdAt / 1000)}:f> — **${h.status}**${decided} (${h.country || 'Unknown'})`;
+      })
+      .join('\n');
+
+    const embed = new EmbedBuilder()
+      .setColor(isBanned ? 0xed4245 : isWhitelisted ? 0x57f287 : 0x5865f2)
+      .setTitle(`🔍 Search Report — ${username}`)
+      .addFields(
+        { name: 'Discord ID', value: discordId, inline: true },
+        { name: 'Total attempts', value: `${entries.length}`, inline: true },
+        { name: 'Current status', value: currentStatus, inline: true },
+        { name: `Timeline (last ${Math.min(10, entries.length)})`, value: timeline || '—', inline: false },
+      );
+
+    return message.reply({ embeds: [embed] });
+  }
+
   if (command === 'help') {
     const embed = new EmbedBuilder()
       .setColor(0x5865f2)
@@ -297,7 +421,10 @@ client.on('messageCreate', async (message) => {
         `\`${PREFIX}list\` - Show all approved accounts\n` +
         `\`${PREFIX}adduser <discordId> [note]\` - Manually approve an account\n` +
         `\`${PREFIX}removeuser <discordId>\` - Remove an account from the approved list\n` +
-        `\`${PREFIX}stats\` - Show accepted/rejected/pending counts`
+        `\`${PREFIX}stats\` - Show accepted/rejected/pending counts\n` +
+        `\`${PREFIX}search <discordId>\` - Show full history report for an account\n` +
+        `\`${PREFIX}banuser <discordId> [reason]\` - Permanently block an account\n` +
+        `\`${PREFIX}unbanuser <discordId>\` - Remove a ban`
       );
     return message.reply({ embeds: [embed] });
   }
@@ -327,6 +454,23 @@ app.post('/api/login-attempt', requireApiKey, async (req, res) => {
 
   if (!discordId || !username) {
     return res.status(400).json({ error: 'discordId and username are required' });
+  }
+
+  // Banned accounts are auto-rejected instantly, without bothering admins
+  if (banned.has(discordId)) {
+    addHistoryEntry({
+      requestId: crypto.randomUUID(),
+      discordId,
+      username,
+      country: country || 'Unknown',
+      avatarUrl: avatarUrl || null,
+      createdAt: Date.now(),
+      status: 'rejected',
+      decidedBy: 'auto (banned)',
+      decidedAt: Date.now(),
+      source: 'website',
+    });
+    return res.json({ requestId: null, status: 'rejected', banned: true });
   }
 
   if (whitelist.has(discordId)) {
