@@ -1,150 +1,64 @@
-# بوت اللوق واعتماد تسجيل الدخول 🔐
+# بوت سحب المواطنين للإداري
 
-بوت ديسكورد + سيرفر صغير (API) يرسل رسالة "لوق" بروم ديسكورد لكل محاولة تسجيل دخول بموقعك، فيها معلومات الشخص وزرين **Accept** و **Reject**. موقعك يسأل السيرفر بعدها "هل تم القبول أو الرفض؟" ويتصرف حسب الجواب.
+بوت Discord يسحب أول مواطن من روم الانتظار إلى روم الإداري تلقائيًا، بشرط:
+- الإداري يكون **لحاله** بروم صوتي (ما فيه أحد ثاني معه).
+- المواطن اللي بينسحب **ما يكون حاطّ ميوت أو ديفن** (لا سيلف ولا سيرفر). إذا كان حاطّهم، يتجاوزه البوت ويجرب اللي بعده.
 
-## خطوات الإعداد
+فيه أيضًا أمر يدوي `/سحب` يقدر الإداري يستخدمه بنفسه.
 
-### 1. سوّي بوت ديسكورد (لو ما عندك واحد)
-نفس خطوات أي بوت عادي: https://discord.com/developers/applications → New Application → Bot → انسخ التوكن.
+## 1) المتطلبات
+- Node.js نسخة 18 أو أحدث.
+- بوت Discord مسجل من [Discord Developer Portal](https://discord.com/developers/applications).
 
-**صلاحيات مطلوبة عند إضافته للسيرفر (OAuth2 → URL Generator):**
-- Scope: `bot`
-- Permissions: `Send Messages`, `Embed Links`, `View Channel`
+## 2) صلاحيات البوت (مهم جدًا)
+لازم يكون عند البوت في رتبته صلاحية **Move Members** (نقل الأعضاء)، ولازم رتبة البوت تكون **أعلى** من رتبة الإداري ومن رتبة المواطنين حتى يقدر ينقلهم.
 
-### 2. جهّز الروم المخصص للوق
-سوّي روم نصي خاص بالأدمنية بس (مثلاً `#login-logs`)، وانسخ الـ **Channel ID** تبعه:
-1. فعّل Developer Mode بديسكورد (User Settings → Advanced → Developer Mode)
-2. اضغط يمين على الروم → **Copy Channel ID**
+عند دعوة البوت، فعّل الـ Scopes التالية:
+- `bot`
+- `applications.commands`
 
-### 3. ثبّت المكتبات
+وفي صلاحيات البوت (Permissions) فعّل:
+- Move Members
+- View Channels
+- Connect (اختياري، للتأكد من رؤية الرومات)
+
+## 3) التثبيت
 ```bash
 npm install
 ```
 
-### 4. جهّز ملف `.env`
-انسخ `.env.example` باسم `.env` واملأ:
-```
-DISCORD_TOKEN=توكن_البوت
-LOG_CHANNEL_ID=آيدي_الروم
-API_KEY=نص_سري_طويل_تختاره_انت
-ADMIN_ROLE_ID=
-PORT=3000
+## 4) الإعدادات
+انسخ ملف `.env.example` إلى `.env` وعبّي القيم:
+
+```bash
+cp .env.example .env
 ```
 
-⚠️ **API_KEY** هو "كلمة السر" اللي موقعك يستخدمها عشان يثبت هويته للسيرفر — اختر نص عشوائي طويل وخله سري تماماً.
+- `BOT_TOKEN`: توكن البوت.
+- `GUILD_ID`: آيدي السيرفر.
+- `WAITING_CHANNEL_ID`: آيدي روم الانتظار.
+- `ADMIN_ROLE_ID`: آيدي رتبة الإداريين.
+- `ADMIN_CATEGORY_ID` (اختياري): لو تبي تحصر السحب التلقائي على رومات إدارية داخل كاتقوري معينة بس.
 
-### 5. شغّله
+> 💡 لتفعيل "وضع المطور" وجلب الآيدي: إعدادات ديسكورد > المظهر المتقدم > وضع المطور، وبعدين كليك يمين على الروم/الرتبة/السيرفر واختر "نسخ الآيدي".
+
+## 5) تسجيل أمر /سحب
+```bash
+npm run deploy
+```
+
+## 6) تشغيل البوت
 ```bash
 npm start
 ```
 
----
+## كيف يشتغل بالضبط؟
+- البوت يراقب أي تغيير صوتي بالسيرفر (دخول/خروج/ميوت/ديفن).
+- كل ما يصير تغيير، يفحص كل الرومات الصوتية ويدور على أي روم فيه **إداري واحد بس لحاله**.
+- إذا لقى روم إداري فاضي، يدور بروم الانتظار على أول شخص مو حاطّ ميوت/ديفن ويسحبه لذاك الروم.
+- إذا الكل بروم الانتظار حاطين ميوت/ديفن، ما يصير سحب لين أحد يشيل الميوت/الديفن أو يدخل شخص جديد.
 
-## كيف يتكامل مع موقعك
-
-السيرفر يوفر **endpoint** (مسارين) عامين، أي موقع أو لغة برمجة تقدر تتواصل معهم (PHP, Node.js, Python...) عن طريق HTTP عادي.
-
-### أ) لما شخص يحاول يسجل دخول — أرسل الطلب
-
-```
-POST https://عنوان-السيرفر-تبعك/api/login-attempt
-Headers: x-api-key: نفس_API_KEY
-Body (JSON):
-{
-  "discordId": "123456789012345678",
-  "username": "user#1234",
-  "country": "Saudi Arabia"
-}
-```
-
-**الرد:**
-```json
-{ "requestId": "abc-123-...", "status": "pending" }
-```
-
-خزّن الـ `requestId` هذا مؤقتاً (بالجلسة أو الكوكيز) عشان تستخدمه بالخطوة الجاية.
-
-### ب) اسأل عن القرار (كرر الطلب كل 2-3 ثواني لين يتغير الرد)
-
-```
-GET https://عنوان-السيرفر-تبعك/api/login-attempt/{requestId}
-Headers: x-api-key: نفس_API_KEY
-```
-
-**الرد:**
-```json
-{ "status": "pending" }     // لسا ما رد الأدمن
-{ "status": "accepted", ... }  // اقبل → خله يدخل الموقع
-{ "status": "rejected", ... }  // ارفض → امنعه من الدخول
-```
-
----
-
-## مثال تكامل (JavaScript / Node.js)
-
-```javascript
-// 1. أرسل محاولة الدخول
-const res = await fetch('https://عنوان-السيرفر-تبعك/api/login-attempt', {
-  method: 'POST',
-  headers: {
-    'Content-Type': 'application/json',
-    'x-api-key': 'نفس_API_KEY',
-  },
-  body: JSON.stringify({
-    discordId: user.id,
-    username: user.username,
-    country: 'Saudi Arabia', // حدده حسب مصدر بياناتك (IP geolocation مثلاً)
-  }),
-});
-const { requestId } = await res.json();
-
-// 2. راقب القرار كل 2 ثانية
-const interval = setInterval(async () => {
-  const check = await fetch(`https://عنوان-السيرفر-تبعك/api/login-attempt/${requestId}`, {
-    headers: { 'x-api-key': 'نفس_API_KEY' },
-  });
-  const data = await check.json();
-
-  if (data.status === 'accepted') {
-    clearInterval(interval);
-    // اسمح له يدخل الموقع
-  } else if (data.status === 'rejected') {
-    clearInterval(interval);
-    // امنعه من الدخول
-  }
-  // لو "pending" استمر بالانتظار
-}, 2000);
-```
-
-## مثال تكامل (PHP)
-
-```php
-<?php
-// 1. أرسل محاولة الدخول
-$ch = curl_init('https://عنوان-السيرفر-تبعك/api/login-attempt');
-curl_setopt($ch, CURLOPT_POST, true);
-curl_setopt($ch, CURLOPT_HTTPHEADER, [
-    'Content-Type: application/json',
-    'x-api-key: نفس_API_KEY',
-]);
-curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode([
-    'discordId' => $discordId,
-    'username'  => $username,
-    'country'   => $country,
-]));
-curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-$response = json_decode(curl_exec($ch), true);
-$requestId = $response['requestId'];
-
-// 2. راقب القرار (استدعِ نفس الكود كل ثانيتين من جهة الفرونت إند بـ JavaScript،
-// أو اعمل صفحة "انتظار الموافقة" تتحقق كل بضع ثواني)
-```
-
----
-
-## ملاحظات مهمة
-
-- الطلبات المعلّقة تُحذف تلقائياً بعد 30 دقيقة من عدم الرد عليها (توفير للذاكرة).
-- لو تبي تقيد الضغط على الأزرار بدور معين بس (مثلاً "Admin")، حط الـ Role ID بمتغير `ADMIN_ROLE_ID` بملف `.env`.
-- البيانات تُخزّن بالذاكرة فقط (تختفي لو البوت أعاد التشغيل). لو تبي سجل دائم لكل المحاولات، أخبرني وأضيف قاعدة بيانات بسيطة.
-- لاستضافته 24/7، تقدر تستخدم نفس طريقة Railway اللي استخدمناها بمشروع بوت الأغاني.
+## تخصيص إضافي (لو تحتاج)
+- لو تبي تستثني رومات معينة من كونها "رومات إدارية"، استخدم `ADMIN_CATEGORY_ID`.
+- لو تبي رسالة ترحيب تنبعث للمواطن أو الإداري بعد السحب، أقدر أضيفها (DM أو رسالة بروم نصي).
+- لو تبي طابور (queue) بالترتيب الزمني بدل أول واحد بالقائمة، أقدر أضيف تتبع وقت الدخول.
