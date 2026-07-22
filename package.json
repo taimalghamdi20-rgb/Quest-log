@@ -1,16 +1,15 @@
 {
-  "name": "login-approval-bot",
+  "name": "pull-citizens-bot",
   "version": "1.0.0",
-  "description": "Discord bot + API that logs website login attempts and requires admin approval via Accept/Reject buttons",
+  "description": "بوت يسحب المواطنين من روم الانتظار إلى روم الإداري تلقائيًا",
   "main": "index.js",
   "type": "commonjs",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "deploy": "node deploy-commands.js"
   },
   "dependencies": {
-    "cors": "^2.8.5",
     "discord.js": "^14.15.3",
-    "express": "^4.19.2",
     "dotenv": "^16.4.5"
   }
 }
